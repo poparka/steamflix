@@ -6,6 +6,7 @@ errors or times out is benched for a cooldown period instead of being retried
 on every single file.
 """
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -242,6 +243,65 @@ def _save_segments(part, size, segments):
         pass
 
 
+# --------------------------------------------------------------------------- #
+# sparse partial files
+# --------------------------------------------------------------------------- #
+# A segmented transfer seeks straight to the back of the file to place its last
+# range, and NTFS answers that by zero-filling everything in front of it. A
+# 12 GB depot therefore costs 12 GB of disk the moment it starts, even if the
+# transfer is cancelled a second later and only a few MB ever arrived. Sizing
+# the file as a hole instead keeps the cost to the bytes actually written; see
+# size_file for why the sparse flag alone does not do it. Volumes that refuse
+# the ioctls simply keep the old behaviour.
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _FSCTL_SET_SPARSE = 0x000900C4
+    _FSCTL_SET_ZERO_DATA = 0x000980C8
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.DeviceIoControl.restype = wintypes.BOOL
+    _kernel32.DeviceIoControl.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+
+    class _ZeroData(ctypes.Structure):
+        _fields_ = [("FileOffset", ctypes.c_longlong),
+                    ("BeyondFinalZero", ctypes.c_longlong)]
+
+    def _ioctl(fh, code, payload=None) -> bool:
+        try:
+            written = wintypes.DWORD(0)
+            return bool(_kernel32.DeviceIoControl(
+                msvcrt.get_osfhandle(fh.fileno()), code,
+                ctypes.byref(payload) if payload is not None else None,
+                ctypes.sizeof(payload) if payload is not None else 0,
+                None, 0, ctypes.byref(written), None))
+        except (OSError, ValueError):
+            return False
+
+    def size_file(fh, size: int):
+        """Give the file its final length without paying for it up front.
+
+        The sparse flag on its own is not enough. NTFS tracks a valid data
+        length, and a write past it zero-fills everything in between - so the
+        first segment to reach the back of the file materialises the whole
+        thing anyway. Punching the range out explicitly after sizing turns it
+        into a real hole, and later writes only allocate what they touch.
+        """
+        sparse = _ioctl(fh, _FSCTL_SET_SPARSE)
+        fh.truncate(size)
+        if sparse:
+            _ioctl(fh, _FSCTL_SET_ZERO_DATA, _ZeroData(0, size))
+else:
+    def size_file(fh, size: int):
+        # ext4, APFS and friends leave a truncated extent as a hole already.
+        fh.truncate(size)
+
+
 def download_segmented(path: str, dest, size: int, progress=None, cancelled=None,
                        segments=None):
     """Fetch one file as several parallel byte ranges, the way a download
@@ -258,8 +318,12 @@ def download_segmented(path: str, dest, size: int, progress=None, cancelled=None
     part = dest.with_suffix(dest.suffix + ".part")
 
     segs = _load_segments(part, size, count)
-    with open(part, "r+b" if part.exists() else "wb") as fh:
-        fh.truncate(size)
+    resuming = part.exists()
+    with open(part, "r+b" if resuming else "wb") as fh:
+        if resuming:
+            fh.truncate(size)        # never punch: that would drop what we have
+        else:
+            size_file(fh, size)
 
     already = sum(s[2] for s in segs)
     if progress and already:
