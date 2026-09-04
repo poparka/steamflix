@@ -1,6 +1,6 @@
 # The browser for old Steam games — SteamFlix
 
-A local, Netflix-style browser for the Steam2 archive: search 5,600 pre-2013
+A local, Netflix-style browser for the Tera archive: search 5,600 pre-2013
 titles, pick any version Valve ever shipped, and SteamFlix downloads the delta
 chain, finds the decryption key and extracts a playable folder.
 
@@ -10,7 +10,7 @@ chain, finds the decryption key and extracts a playable folder.
 
 ## What it does
 
-The Steam2 archive is a mirror of Valve's original content servers. It holds
+The Tera archive is a mirror of Valve's original content servers. It holds
 116,000 blob and dat files covering every version of thousands of games as they
 were shipped between 2003 and 2013 — but as a flat directory of filenames like
 `441_396_7f92e6ea_a64546b9….blob`, which is unusable by hand.
