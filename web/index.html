@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamFlix</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand" data-view="home">STEAM<span>FLIX</span></div>
+
+  <button class="icon-btn nav-toggle" id="nav-toggle" aria-expanded="false"
+          aria-label="Menu">&#9776;</button>
+
+  <nav class="nav" id="nav">
+    <a href="#" class="nav-link active" data-view="home">Home</a>
+    <a href="#" class="nav-link" data-view="browse">Browse</a>
+    <a href="#" class="nav-link" data-view="library">My Library</a>
+    <a href="#" class="nav-link" data-view="downloads">Downloads <span class="pill" id="job-pill" hidden>0</span></a>
+    <a href="#" class="nav-link" data-view="settings">Settings</a>
+  </nav>
+
+  <div class="topbar-right">
+    <div class="search">
+      <input id="search" type="search" placeholder="Search games or depot id" autocomplete="off">
+    </div>
+
+    <button class="icon-btn" id="storage-btn" title="Storage">
+      <span class="storage-mini"><span class="storage-mini-fill" id="storage-mini-fill"></span></span>
+      <span id="storage-mini-text">--</span>
+    </button>
+
+    <div class="dropdown" id="logs-dropdown">
+      <button class="icon-btn" id="logs-btn" title="Logs">
+        Logs <span class="pill danger" id="log-pill" hidden>0</span>
+      </button>
+      <div class="dropdown-panel" id="logs-panel" hidden>
+        <div class="dropdown-head">
+          <strong>Error log</strong>
+          <div class="log-filters">
+            <select id="log-category">
+              <option value="all">All categories</option>
+            </select>
+            <select id="log-level">
+              <option value="all">All levels</option>
+              <option value="error">Errors</option>
+              <option value="warning">Warnings</option>
+              <option value="info">Info</option>
+            </select>
+            <button class="ghost-btn" id="log-clear">Clear</button>
+          </div>
+        </div>
+        <div class="log-list" id="log-list"></div>
+      </div>
+    </div>
+
+    <div class="dropdown" id="power-dropdown">
+      <button class="icon-btn" id="power-btn" title="Shut down SteamFlix">Quit</button>
+      <div class="dropdown-panel narrow" id="power-panel" hidden>
+        <div class="dropdown-head"><strong>Close SteamFlix</strong></div>
+        <div class="status-body">
+          <p class="power-note">
+            SteamFlix runs a small server on this machine. Stopping it frees the
+            port and ends any download in progress; nothing already extracted is
+            touched.
+          </p>
+          <div class="row-flex" style="margin-top:10px">
+            <button class="btn accent" id="btn-shutdown">Stop the server</button>
+            <button class="ghost-btn" id="btn-shutdown-exit">Stop and close this tab</button>
+          </div>
+          <div id="power-result"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dropdown" id="status-dropdown">
+      <button class="icon-btn" id="status-btn" title="Status">Status</button>
+      <div class="dropdown-panel narrow" id="status-panel" hidden>
+        <div class="dropdown-head"><strong>Mirrors &amp; catalogue</strong></div>
+        <div id="status-body" class="status-body"></div>
+        <div class="dropdown-head" style="margin-top:6px"><strong>Loading</strong></div>
+        <div class="status-body">
+          <label class="toggle-row">
+            <input type="checkbox" id="opt-light" checked>
+            <span>
+              <strong>Light first load</strong>
+              <small>Start with two short shelves and fetch the rest on demand,
+                     so opening SteamFlix costs the mirror almost nothing.</small>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="opt-lazyart" checked>
+            <span>
+              <strong>Load artwork on scroll</strong>
+              <small>Only fetch cover art for cards you can actually see.</small>
+            </span>
+          </label>
+          <div class="row-flex" style="margin-top:8px">
+            <button class="ghost-btn" id="btn-allart">Load every cover now</button>
+          </div>
+        </div>
+        <div class="dropdown-head" style="margin-top:6px"><strong>Torrent fallback</strong></div>
+        <div class="status-body" id="torrent-body"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="boot" class="boot">
+  <div class="boot-inner">
+    <div class="boot-logo" id="boot-logo"><span class="lg-steam">STEAM</span><span class="lg-flix">FLIX</span></div>
+    <div class="boot-msg" id="boot-msg">Building the catalogue from the mirror&hellip;</div>
+    <div class="boot-bar"><div class="boot-bar-fill" id="boot-bar"></div></div>
+    <div class="boot-sub" id="boot-sub"></div>
+    <div class="boot-stream" id="boot-stream"></div>
+    <div class="boot-stats" id="boot-stats"></div>
+  </div>
+</div>
+
+<!-- FIRST RUN ------------------------------------------------------------ -->
+<div class="modal" id="welcome" hidden>
+  <div class="modal-backdrop"></div>
+  <div class="modal-card welcome-card">
+    <div class="welcome-body">
+      <div class="welcome-logo"><span class="lg-steam">STEAM</span><span class="lg-flix">FLIX</span></div>
+      <h2>How much should the first screen load?</h2>
+      <p class="welcome-lead">
+        The mirror holds <strong id="welcome-count">many</strong> titles. SteamFlix does
+        not have to fetch them all to show you around, and every cover it draws is one
+        request to Steam's art server.
+      </p>
+
+      <div class="welcome-picks">
+        <button class="pick" data-pick="light">
+          <strong>Just a taste</strong>
+          <span>A couple of short shelves and covers only for what is on screen.
+                Easiest on the mirror, and the fastest way in.</span>
+          <em>Recommended</em>
+        </button>
+        <button class="pick" data-pick="full">
+          <strong>Load everything</strong>
+          <span>Ten full shelves up front and every cover fetched as it is drawn.
+                Heavier, but nothing to click through later.</span>
+        </button>
+      </div>
+      <p class="welcome-foot">
+        Either way you can change it whenever you like under
+        <strong>Status &rarr; Loading</strong>.
+      </p>
+    </div>
+  </div>
+</div>
+
+<main id="app" hidden>
+
+  <!-- HOME ------------------------------------------------------------- -->
+  <section class="view" id="view-home">
+    <div class="hero" id="hero">
+      <div class="hero-art" id="hero-art"></div>
+      <div class="hero-art hero-art-next" id="hero-art-next"></div>
+      <div class="hero-fade"></div>
+      <div class="hero-body">
+        <h1 id="hero-title">&nbsp;</h1>
+        <div class="hero-meta" id="hero-meta"></div>
+        <p class="hero-desc" id="hero-desc"></p>
+        <div class="hero-actions">
+          <button class="btn primary" id="hero-play">Get this version</button>
+          <button class="btn ghost" id="hero-info">More info</button>
+          <button class="heart-btn big" id="hero-heart" title="Add to favourites"
+                  aria-pressed="false">&#9825;</button>
+        </div>
+        <div class="hero-dots" id="hero-dots"></div>
+      </div>
+    </div>
+    <div class="home-bar">
+      <span class="home-bar-label">Arrange shelves by</span>
+      <div class="seg" id="arrange">
+        <button type="button" class="seg-btn active" data-arrange="mixed">Mixed</button>
+        <button type="button" class="seg-btn" data-arrange="genre">Genre</button>
+        <button type="button" class="seg-btn" data-arrange="year">Year</button>
+      </div>
+    </div>
+    <div id="shelves"></div>
+    <div class="grid-more">
+      <button class="btn ghost" id="more-shelves" hidden>Show more shelves</button>
+      <span id="home-status"></span>
+    </div>
+  </section>
+
+  <!-- BROWSE ----------------------------------------------------------- -->
+  <section class="view" id="view-browse" hidden>
+    <div class="view-head">
+      <h2>Browse the mirror</h2>
+      <div class="filters">
+        <select id="scope">
+          <option value="all">Everything</option>
+          <option value="favourite">&#9829; Favourites</option>
+          <option value="named">Identified games</option>
+          <option value="unidentified">Unidentified depots</option>
+          <option value="reset">Reset depots</option>
+          <option value="keyed">Has decryption key</option>
+          <option value="nokey">No key yet</option>
+        </select>
+        <select id="year" title="Filter by year">
+          <option value="">All years</option>
+        </select>
+        <select id="genre" title="Filter by genre">
+          <option value="">All genres</option>
+        </select>
+        <select id="developer" title="Filter by studio">
+          <option value="">All studios</option>
+        </select>
+        <select id="publisher" title="Filter by publisher">
+          <option value="">All publishers</option>
+        </select>
+        <select id="sort">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="name">Name A-Z</option>
+          <option value="studio">Studio A-Z</option>
+          <option value="versions">Most versions</option>
+          <option value="updated">Recently updated</option>
+          <option value="depot">Depot id</option>
+        </select>
+        <span class="result-count" id="browse-count"></span>
+      </div>
+    </div>
+    <div class="chips" id="browse-chips" hidden></div>
+    <div class="grid" id="browse-grid"></div>
+    <div class="grid-more">
+      <button class="btn ghost" id="load-more" hidden>Load more</button>
+      <span id="browse-status"></span>
+    </div>
+  </section>
+
+  <!-- LIBRARY ---------------------------------------------------------- -->
+  <section class="view" id="view-library" hidden>
+    <div class="view-head">
+      <h2>My Library</h2>
+      <div class="filters">
+        <button class="ghost-btn" id="open-library-folder">Open folder</button>
+        <span class="result-count" id="library-count"></span>
+      </div>
+    </div>
+    <div class="storage-panel" id="storage-panel"></div>
+    <div class="grid" id="library-grid"></div>
+    <div class="empty" id="library-empty" hidden>
+      Nothing downloaded yet. Pick a game from <a href="#" data-view="browse">Browse</a>
+      and SteamFlix will build it its own folder.
+    </div>
+  </section>
+
+  <!-- SETTINGS --------------------------------------------------------- -->
+  <section class="view" id="view-settings" hidden>
+    <div class="view-head">
+      <h2>Settings</h2>
+      <div class="filters">
+        <button class="ghost-btn" id="settings-reset">Reset to defaults</button>
+        <span class="result-count" id="settings-saved"></span>
+      </div>
+    </div>
+
+    <div class="settings-wrap">
+
+      <!-- sources -->
+      <section class="panel">
+        <h3>Where files come from</h3>
+        <p class="panel-lead">
+          SteamFlix can pull blobs and dats over HTTP from the mirrors, out of the
+          steam2 torrent, or from both. The mirrors are much faster per file; the
+          swarm keeps working when they are down and spreads the load when you
+          queue several titles at once.
+        </p>
+        <div class="seg" id="source-mode">
+          <button type="button" class="seg-btn" data-source="auto">Mirrors, torrent as backup</button>
+          <button type="button" class="seg-btn" data-source="mirrors">Mirrors only</button>
+          <button type="button" class="seg-btn" data-source="torrent">Torrent only</button>
+        </div>
+
+        <label class="toggle-row">
+          <input type="checkbox" id="set-torrent-busy">
+          <span>
+            <strong>Spread a busy queue across both</strong>
+            <small>When more than one download is running, send part of each batch
+                   to the swarm instead of asking two volunteer-run hosts for
+                   everything.</small>
+          </span>
+        </label>
+        <label class="field inline">
+          <span>Downloads before that kicks in</span>
+          <input class="text-input small" type="number" min="1" max="8" id="set-busy-threshold">
+        </label>
+      </section>
+
+      <!-- mirrors -->
+      <section class="panel">
+        <h3>Mirrors</h3>
+        <p class="panel-lead">
+          Tried in order, top first. A mirror that errors is benched for a couple
+          of minutes and traffic moves to the next one.
+        </p>
+        <div class="mirror-list" id="mirror-list"></div>
+        <div class="row-flex" style="margin-top:10px">
+          <input class="text-input" id="mirror-new" style="flex:1"
+                 placeholder="http://another.steam2.mirror">
+          <button class="ghost-btn" id="mirror-test">Test</button>
+          <button class="btn ghost" id="mirror-add">Add mirror</button>
+        </div>
+        <div id="mirror-result"></div>
+      </section>
+
+      <!-- politeness -->
+      <section class="panel">
+        <h3>Traffic</h3>
+        <p class="panel-lead">
+          These mirrors are run by volunteers. Everything here exists so SteamFlix
+          can fetch a whole delta chain without behaving like a scraper - the
+          defaults are already gentle, and turning them down further costs you
+          nothing but time.
+        </p>
+        <div class="settings-grid">
+          <label class="field">
+            <span>Pause between requests (ms)</span>
+            <input class="text-input" type="number" min="0" max="5000" step="10" id="set-delay">
+          </label>
+          <label class="field">
+            <span>Requests per minute, hard ceiling</span>
+            <input class="text-input" type="number" min="10" max="3000" step="10" id="set-rpm">
+          </label>
+          <label class="field">
+            <span>Files downloaded at once</span>
+            <input class="text-input" type="number" min="1" max="16" id="set-threads">
+          </label>
+          <label class="field">
+            <span>Parallel ranges per large file</span>
+            <input class="text-input" type="number" min="1" max="16" id="set-segments">
+          </label>
+          <label class="field">
+            <span>Pause between metadata lookups (ms)</span>
+            <input class="text-input" type="number" min="0" max="5000" step="10" id="set-resolve-delay">
+          </label>
+          <label class="field">
+            <span>Metadata lookups at once</span>
+            <input class="text-input" type="number" min="1" max="8" id="set-resolve-threads">
+          </label>
+        </div>
+        <div class="note" id="traffic-note"></div>
+      </section>
+
+      <!-- proxies -->
+      <section class="panel">
+        <h3>Proxies</h3>
+        <p class="panel-lead">
+          Off by default. Useful if a mirror blocks your ISP; otherwise it only
+          makes downloads slower and routes your traffic through machines run by
+          strangers. Public lists are mostly dead entries, so everything is
+          checked before it is used.
+        </p>
+        <label class="toggle-row">
+          <input type="checkbox" id="set-proxy-enabled">
+          <span>
+            <strong>Send mirror traffic through a proxy</strong>
+            <small>Applies to mirror and metadata requests. Torrent traffic is
+                   unaffected.</small>
+          </span>
+        </label>
+        <div class="settings-grid">
+          <label class="field">
+            <span>Rotation</span>
+            <select id="set-proxy-mode">
+              <option value="rotate">Rotate through the pool</option>
+              <option value="first">Always use the first working one</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Public list to top up from</span>
+            <input class="text-input" id="set-proxy-source" placeholder="https://…/http.txt">
+          </label>
+        </div>
+        <label class="field">
+          <span>Your own proxies, one per line (host:port)</span>
+          <textarea class="text-input" id="set-proxy-list" rows="4"></textarea>
+        </label>
+        <div class="row-flex" style="margin-top:10px">
+          <button class="ghost-btn" id="proxy-check">Check my list</button>
+          <button class="ghost-btn" id="proxy-public">Top up from the public list</button>
+          <span class="result-count" id="proxy-status"></span>
+        </div>
+        <div id="proxy-result"></div>
+      </section>
+
+      <!-- diagnostics -->
+      <section class="panel">
+        <h3>Diagnostics</h3>
+        <p class="panel-lead">
+          Checks this installation end to end: Python, packages, the catalogue,
+          disk space, the extractor, the key table, both mirrors, the torrent
+          swarm and everything already downloaded.
+        </p>
+        <div class="row-flex">
+          <button class="btn accent" id="diag-run">Run diagnostics</button>
+          <button class="ghost-btn" id="diag-quick">Quick check (no network)</button>
+        </div>
+        <div id="diag-result"></div>
+      </section>
+
+    </div>
+  </section>
+
+  <!-- DOWNLOADS -------------------------------------------------------- -->
+  <section class="view" id="view-downloads" hidden>
+    <div class="view-head">
+      <h2>Downloads</h2>
+      <div class="filters">
+        <button class="ghost-btn" id="clear-jobs">Clear finished</button>
+      </div>
+    </div>
+    <div id="job-list"></div>
+    <div class="empty" id="jobs-empty">No downloads yet.</div>
+  </section>
+
+</main>
+
+<!-- DETAIL MODAL --------------------------------------------------------- -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card" id="modal-card">
+    <button class="modal-close" data-close>&times;</button>
+    <div class="modal-hero" id="modal-hero">
+      <div class="modal-hero-fade"></div>
+      <div class="modal-hero-body">
+        <h2 id="modal-title"></h2>
+        <div class="badges" id="modal-badges"></div>
+      </div>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- PLAYER MODAL --------------------------------------------------------- -->
+<div class="modal" id="player" hidden>
+  <div class="modal-backdrop" data-close-player></div>
+  <div class="modal-card player-card">
+    <button class="modal-close" data-close-player>&times;</button>
+    <div class="player-stage" id="player-stage"></div>
+    <div class="player-body" id="player-body"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

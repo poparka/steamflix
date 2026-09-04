@@ -1,0 +1,19 @@
+# Anything a run of SteamFlix produces
+data/
+library/
+tools/
+*.torrent
+start.bat
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
