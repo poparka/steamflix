@@ -1,4 +1,4 @@
-# The browser for old Steam games — SteamFlix
+# The browser for Steam teraleak — SteamFlix
 
 A local, Netflix-style browser for the Tera archive: search 5,600 pre-2013
 titles, pick any version Valve ever shipped, and SteamFlix downloads the delta
