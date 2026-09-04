@@ -42,8 +42,28 @@ silently handed to you looking fine.
 SteamFlix carries a small, purpose-built BitTorrent client. When every mirror
 refuses a file it locates that file's byte range inside the 12 TiB archive
 torrent, asks peers for only the 16 KiB blocks covering it, and checks the
-result against the SHA-256 already in the filename. It never seeds and has no
-interest in the other 12 TiB.
+result against the SHA-256 already in the filename. It has no interest in the
+other 12 TiB.
+
+### Putting it back
+
+The archive stays up because people share it, so SteamFlix seeds what it has.
+Every blob and dat it downloads is byte-identical to what the torrent carries,
+by either route, so those same files go back out to whoever is pulling them
+next.
+
+BitTorrent shares pieces rather than files, and these are 16 MiB against a
+median file of 150 KiB, so a piece is only offered once files on disk cover it
+completely *and* its SHA-1 matches the torrent. Nothing else is advertised — a
+half-downloaded file cannot leak into the swarm. Uploading happens over the
+connections SteamFlix opens anyway, which works from behind any NAT, and over a
+listening port for peers who want to start the connection themselves. It asks
+the router for that port over UPnP or NAT-PMP; if the router says no, the Status
+panel tells you which port to forward instead of quietly seeding to nobody.
+
+Every announce reports the bytes still missing honestly, so SteamFlix appears as
+what it is: a partial seed for the games on this machine. It is off with one
+switch in Settings.
 
 ---
 
@@ -111,9 +131,10 @@ holding the content you actually want.
 extraction against its manifest; *Play* launches the game and reports the exit
 code if it dies on startup.
 
-**Settings** covers where files come from (mirrors, torrent, or both), the
-mirror list, how gently to fetch, optional proxying, and a diagnostics report
-that checks the whole installation end to end.
+**Settings** covers where files come from (mirrors, torrent, or both), what to
+seed back and on which port, the mirror list, how gently to fetch, optional
+proxying, and a diagnostics report that checks the whole installation end to
+end.
 
 ---
 
@@ -123,7 +144,9 @@ The mirrors are run by volunteers. SteamFlix paces itself by default — a delay
 between requests, a ceiling on requests per minute, and a cap on simultaneous
 connections — and every one of those is in Settings if you want it gentler.
 With several downloads queued it can route part of the batch through BitTorrent
-instead, so a queue of games doesn't land entirely on two donated hosts.
+instead, so a queue of games doesn't land entirely on two donated hosts. Seeding
+is the same courtesy pointed the other way, and it has an upload cap for when it
+is not.
 
 ---
 
@@ -160,6 +183,8 @@ steamflix/
   jobs.py              download + extract jobs
   net.py               mirrors, segmented transfers, pacing, fallback
   torrent.py           the built-in BitTorrent client
+  seed.py              verified pieces, and serving them back
+  portmap.py           UPnP / NAT-PMP, so incoming peers can reach you
   proxies.py           optional proxy pool
   diagnostics.py       self-checks and install verification
   settings.py          user settings

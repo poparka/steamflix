@@ -1866,6 +1866,7 @@ async function refreshTorrentPanel() {
     <div class="status-row"><span>Trackers</span><span>${t.trackers}</span></div>
     <div class="status-row"><span>Used when</span>
       <span>${t.enabled ? 'every mirror fails' : 'never (disabled)'}</span></div>
+    ${seedRows(t.seed)}
     <div class="row-flex" style="margin-top:10px">
       <button class="ghost-btn" id="btn-swarm">Check the swarm</button>
     </div>
@@ -1887,6 +1888,34 @@ async function refreshTorrentPanel() {
       btn.textContent = 'Check the swarm';
     }
   });
+}
+
+// What SteamFlix is giving back, in the same panel that says what it takes.
+function seedRows(s) {
+  if (!s) return '';
+  if (!s.enabled) {
+    return `<div class="status-row"><span>Seeding</span><span>off</span></div>`;
+  }
+  if (!s.running) {
+    return `<div class="status-row"><span>Seeding</span>
+      <span>${esc(s.reason || 'not running')}</span></div>`;
+  }
+  const verifying = s.state === 'verifying' && s.to_check
+    ? ` (checking ${s.checked.toLocaleString()}/${s.to_check.toLocaleString()})` : '';
+  // Two different things are worth knowing: how much we can serve, and whether
+  // anyone outside can actually ask for it.
+  const reach = s.reachable
+    ? `port ${s.port}, forwarded`
+    : `port ${s.port}, not forwarded`;
+  return `
+    <div class="status-row"><span>Seeding</span>
+      <span>${bytes(s.bytes)} in ${s.pieces.toLocaleString()} piece(s)${verifying}</span></div>
+    <div class="status-row"><span>Uploaded</span>
+      <span>${bytes(s.uploaded_total)}${s.ratio !== null && s.ratio !== undefined
+        ? ` (ratio ${s.ratio})` : ''}</span></div>
+    <div class="status-row"><span>Peers</span>
+      <span>${s.peers.length} connected, ${s.peers_served} since start</span></div>
+    <div class="status-row"><span>Reachable</span><span>${reach}</span></div>`;
 }
 
 /* --------------------------------------------------------------- settings */
@@ -1911,6 +1940,14 @@ function paintSettings() {
   $('#set-torrent-busy').checked = !!c.torrent_when_busy;
   $('#set-busy-threshold').value = c.torrent_busy_threshold;
 
+  $('#set-seed-enabled').checked = !!c.seed_enabled;
+  $('#set-seed-portmap').checked = !!c.seed_portmap;
+  $('#set-seed-port').value = c.seed_port;
+  $('#set-seed-kbps').value = c.seed_up_kbps;
+  $('#set-seed-peers').value = c.seed_max_peers;
+  $('#set-seed-slots').value = c.seed_slots;
+  paintSeedLive();
+
   $('#set-delay').value = c.request_delay_ms;
   $('#set-rpm').value = c.max_requests_per_minute;
   $('#set-threads').value = c.download_threads;
@@ -1927,6 +1964,53 @@ function paintSettings() {
 
   paintMirrors();
   paintTrafficNote();
+}
+
+// The seeding panel is the one place that can honestly answer "is this
+// actually working?", so it says what is being served and who can reach it.
+async function paintSeedLive() {
+  const box = $('#seed-live');
+  if (!box) return;
+  let s;
+  try { s = await api('/api/torrent/seed'); } catch (e) { return; }
+  state.seed = s;
+  if (!s.available) {
+    box.innerHTML = `<div class="note">There is no <code>steam2.torrent</code>
+      beside SteamFlix, so there is nothing to seed into.</div>`;
+    return;
+  }
+  if (!s.enabled || !s.running) {
+    box.innerHTML = `<div class="note">Not seeding right now${
+      s.reason ? ` — ${esc(s.reason)}` : ''}.</div>`;
+    return;
+  }
+  const verifying = s.state === 'verifying' && s.to_check
+    ? `<div class="note">Checking which pieces are complete:
+       ${s.checked.toLocaleString()} of ${s.to_check.toLocaleString()}.</div>` : '';
+  // A piece is 16 MiB, so a library of small blobs can legitimately have
+  // nothing whole to share yet. Say so rather than looking broken.
+  const nothing = !s.pieces ? `<div class="note">Nothing complete to share yet.
+      A shareable piece is 16 MiB of the torrent and has to be whole, which
+      usually means a downloaded game rather than a single blob.</div>` : '';
+  const reach = s.reachable
+    ? `<div class="note good">Port ${s.port} is forwarded by
+       ${esc((s.mapping.method || '').toUpperCase())}${s.mapping.external_ip
+         ? ` (${esc(s.mapping.external_ip)})` : ''}, so other peers can connect in.</div>`
+    : `<div class="note">Port ${s.port} is not forwarded, so SteamFlix can only
+       upload to peers it connects to itself. Forward TCP ${s.port} to this
+       machine, or turn UPnP on at the router, to accept incoming peers too.</div>`;
+  box.innerHTML = `
+    <div class="status-row"><span>Sharing</span>
+      <span>${bytes(s.bytes)} in ${s.pieces.toLocaleString()} verified piece(s)</span></div>
+    <div class="status-row"><span>From</span><span>${s.files} local file(s)</span></div>
+    <div class="status-row"><span>Uploaded</span>
+      <span>${bytes(s.uploaded_total)}${s.ratio !== null && s.ratio !== undefined
+        ? ` (ratio ${s.ratio})` : ''}</span></div>
+    <div class="status-row"><span>Peers</span>
+      <span>${s.peers.length} now, ${s.peers_served} since start</span></div>
+    <div class="status-row"><span>Trackers</span>
+      <span>${s.trackers_ok} answering, ${s.swarm_peers} peer(s) in the swarm</span></div>
+    ${verifying}${nothing}${reach}`;
 }
 
 function paintMirrors() {
@@ -1976,6 +2060,12 @@ function settingsFromForm() {
   return {
     torrent_when_busy: $('#set-torrent-busy').checked,
     torrent_busy_threshold: Number($('#set-busy-threshold').value),
+    seed_enabled: $('#set-seed-enabled').checked,
+    seed_portmap: $('#set-seed-portmap').checked,
+    seed_port: Number($('#set-seed-port').value),
+    seed_up_kbps: Number($('#set-seed-kbps').value),
+    seed_max_peers: Number($('#set-seed-peers').value),
+    seed_slots: Number($('#set-seed-slots').value),
     request_delay_ms: Number($('#set-delay').value),
     max_requests_per_minute: Number($('#set-rpm').value),
     download_threads: Number($('#set-threads').value),
@@ -2191,7 +2281,9 @@ function wire() {
 
   ['set-torrent-busy', 'set-busy-threshold', 'set-delay', 'set-rpm', 'set-threads',
    'set-segments', 'set-resolve-delay', 'set-resolve-threads', 'set-proxy-enabled',
-   'set-proxy-mode', 'set-proxy-source', 'set-proxy-list'].forEach(id => {
+   'set-proxy-mode', 'set-proxy-source', 'set-proxy-list', 'set-seed-enabled',
+   'set-seed-portmap', 'set-seed-port', 'set-seed-kbps', 'set-seed-peers',
+   'set-seed-slots'].forEach(id => {
     const el = $(`#${id}`);
     if (!el) return;
     el.addEventListener('change', () => saveSettings());
@@ -2205,6 +2297,23 @@ function wire() {
         }
         queueSettingsSave();
       });
+    }
+  });
+
+  $('#btn-seed-verify').addEventListener('click', async ev => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Checking';
+    try {
+      await api('/api/torrent/seed/verify', { method: 'POST' });
+      // The scan runs in the background, so look again once it has had a
+      // moment rather than reporting the state it was in before the click.
+      setTimeout(paintSeedLive, 1200);
+    } catch (e) {
+      toast('Could not re-check the library', 'bad', e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Re-check the library';
     }
   });
 

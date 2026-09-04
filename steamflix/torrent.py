@@ -10,13 +10,20 @@ design is built around one job:
 
     given "blobs/441_0_7f92e6ea_....blob", produce that one file
 
-Which means: no seeding, no piece picking strategy, no DHT, no resume files.
-Just work out which byte range of the torrent the wanted file occupies, ask
-peers for exactly the 16 KiB blocks covering it, and stop.
+Which means: no piece picking strategy, no DHT, no resume files. Just work out
+which byte range of the torrent the wanted file occupies, ask peers for exactly
+the 16 KiB blocks covering it, and stop.
 
-Correctness does not suffer from skipping piece hashes. Every blob and dat
-carries its own SHA-256 in its filename, so a finished file is verified against
-a stronger hash than the torrent's own SHA-1 pieces would give.
+Correctness does not suffer from skipping piece hashes on the way in. Every blob
+and dat carries its own SHA-256 in its filename, so a finished file is verified
+against a stronger hash than the torrent's own SHA-1 pieces would give.
+
+Giving back is the other half, and it lives in seed.py: which pieces this
+machine holds in full, and a listening socket to serve them from. This module
+takes part in that too. A peer we dialled to download from can ask us for
+pieces over the very same socket, which is the one route out of a household NAT
+that needs no router setup at all, so ``seed`` registers its piece store here
+and every connection we open advertises what we have.
 """
 import hashlib
 import os
@@ -40,6 +47,48 @@ TRACKER_TIMEOUT = 8
 
 class TorrentError(Exception):
     pass
+
+
+# seed.py drops its verified piece store here when seeding starts. Every peer
+# we dial then advertises what we hold and answers requests for it, so uploads
+# happen even when nothing outside can reach us.
+_upload_source = None
+_listen_port = 6881
+_traffic = {"downloaded": 0, "uploaded": 0}
+_traffic_lock = threading.Lock()
+
+
+def set_upload_source(store, port=None):
+    """Let downloads serve pieces back. ``store`` is None to stop."""
+    global _upload_source, _listen_port
+    _upload_source = store
+    if port:
+        _listen_port = port
+
+
+def upload_source():
+    return _upload_source
+
+
+def listen_port() -> int:
+    """The port trackers should hand out for us, so peers can connect back."""
+    return _listen_port
+
+
+def note_downloaded(n):
+    with _traffic_lock:
+        _traffic["downloaded"] += n
+
+
+def note_uploaded(n):
+    with _traffic_lock:
+        _traffic["uploaded"] += n
+
+
+def traffic():
+    """Bytes moved since this run started, both ways."""
+    with _traffic_lock:
+        return dict(_traffic)
 
 
 # --------------------------------------------------------------------------- #
@@ -96,7 +145,10 @@ class Meta:
 
         self.name = info[b"name"].decode("utf-8", "replace")
         self.piece_length = info[b"piece length"]
-        self.piece_count = len(info[b"pieces"]) // 20
+        # Kept, not discarded: seeding may only advertise a piece whose SHA-1
+        # actually matches, and this is where that hash comes from.
+        self.pieces = info[b"pieces"]
+        self.piece_count = len(self.pieces) // 20
         self.total = 0
         self.files = []                       # (path, offset, length)
         offset = 0
@@ -120,6 +172,14 @@ class Meta:
         # waste a connection attempt.
         self.trackers = [t for t in dict.fromkeys(self.trackers)
                          if t.startswith(("udp://", "http://", "https://"))]
+
+    def piece_hash(self, index: int) -> bytes:
+        return self.pieces[index * 20:index * 20 + 20]
+
+    def piece_size(self, index: int) -> int:
+        """The last piece is short; every other one is a full piece length."""
+        start = index * self.piece_length
+        return max(0, min(self.piece_length, self.total - start))
 
 
 _meta = None
@@ -186,8 +246,14 @@ def find_file(name: str, kind: str):
 # --------------------------------------------------------------------------- #
 # trackers
 # --------------------------------------------------------------------------- #
-def _udp_announce(url, info_hash, left, want=200):
-    """BEP 15 announce. Two round trips: connect, then announce."""
+def _udp_announce(url, info_hash, left, want=200, port=6881, uploaded=0,
+                  downloaded=0, event=2):
+    """BEP 15 announce. Two round trips: connect, then announce.
+
+    Returns (peers, interval). ``port`` has to be the port we really listen on:
+    it is the address the tracker hands to everyone else, and getting it wrong
+    is the difference between being seen as a seeder and being invisible.
+    """
     parsed = urlparse(url)
     addr = (parsed.hostname, parsed.port or 80)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -203,36 +269,48 @@ def _udp_announce(url, info_hash, left, want=200):
             raise TorrentError("bad connect reply")
 
         txn = random.getrandbits(31)
+        # Thirteen fields, in BEP 15 order. There used to be fourteen arguments
+        # against a thirteen-field format, so struct.pack raised on every UDP
+        # tracker and peers() quietly wrote the whole UDP half of the tracker
+        # list off as "down" - most of the swarm, in other words.
         req = struct.pack(">QII20s20sQQQIIIiH", conn_id, 1, txn, info_hash, PEER_ID,
-                          0, left, 0, 2, 0, random.getrandbits(31), -1, want, 6881)
+                          downloaded, left, uploaded, event, 0,
+                          random.getrandbits(31), want, port)
         sock.sendto(req, addr)
-        data, _ = sock.recvfrom(4096)
+        data, _ = sock.recvfrom(8192)
         if len(data) < 20:
             raise TorrentError("short announce reply")
         action, rtxn = struct.unpack(">II", data[:8])
         if action != 1 or rtxn != txn:
             raise TorrentError("bad announce reply")
-        return _peers_from_compact(data[20:])
+        interval, = struct.unpack(">I", data[8:12])
+        return _peers_from_compact(data[20:]), interval
     finally:
         sock.close()
 
 
-def _http_announce(url, info_hash, left, want=200):
+def _http_announce(url, info_hash, left, want=200, port=6881, uploaded=0,
+                   downloaded=0, event="started"):
     import requests
-    query = urlencode({
-        "info_hash": info_hash, "peer_id": PEER_ID, "port": 6881,
-        "uploaded": 0, "downloaded": 0, "left": left,
-        "compact": 1, "numwant": want, "event": "started",
-    })
+    fields = {
+        "info_hash": info_hash, "peer_id": PEER_ID, "port": port,
+        "uploaded": uploaded, "downloaded": downloaded, "left": left,
+        "compact": 1, "numwant": want,
+    }
+    if event:                       # a re-announce carries no event at all
+        fields["event"] = event
     sep = "&" if "?" in url else "?"
-    r = requests.get(url + sep + query, timeout=TRACKER_TIMEOUT)
+    r = requests.get(url + sep + urlencode(fields), timeout=TRACKER_TIMEOUT)
     if r.status_code >= 400:
         raise TorrentError(f"tracker said {r.status_code}")
     body, _ = bdecode(r.content)
-    peers = body.get(b"peers")
-    if isinstance(peers, bytes):
-        return _peers_from_compact(peers)
-    return [(p[b"ip"].decode(), p[b"port"]) for p in peers or []]
+    if body.get(b"failure reason"):
+        raise TorrentError(body[b"failure reason"].decode("utf-8", "replace"))
+    interval = int(body.get(b"interval") or 1800)
+    found = body.get(b"peers")
+    if isinstance(found, bytes):
+        return _peers_from_compact(found), interval
+    return [(p[b"ip"].decode(), p[b"port"]) for p in found or []], interval
 
 
 def _peers_from_compact(blob: bytes):
@@ -245,7 +323,32 @@ def _peers_from_compact(blob: bytes):
     return out
 
 
-def peers(limit=200, deadline=25):
+EVENTS = {0: "", 1: "completed", 2: "started", 3: "stopped"}
+
+
+def announce(url, port=None, left=None, uploaded=0, downloaded=0, event=2,
+             want=200):
+    """One announce to one tracker, either protocol. Returns (peers, interval).
+
+    Seeding lives or dies on this call: ``left`` is what tells the swarm how
+    much of the torrent we already hold, and ``port`` is where they reach us.
+    """
+    m = meta()
+    port = listen_port() if port is None else port
+    if left is None:
+        # What we are still missing, so a seeder is not announced as a leecher.
+        held = getattr(_upload_source, "bytes_have", 0) if _upload_source else 0
+        left = max(0, m.total - held)
+    else:
+        left = max(0, left)
+    if url.startswith("udp://"):
+        return _udp_announce(url, m.info_hash, left, want, port, uploaded,
+                             downloaded, event)
+    return _http_announce(url, m.info_hash, left, want, port, uploaded,
+                          downloaded, EVENTS.get(event, ""))
+
+
+def peers(limit=200, deadline=25, port=None, left=None):
     """Ask trackers for peers until we have enough or run out of time."""
     m = meta()
     found, seen = [], set()
@@ -254,8 +357,7 @@ def peers(limit=200, deadline=25):
         if len(found) >= limit or time.time() > stop:
             break
         try:
-            got = (_udp_announce(url, m.info_hash, m.total) if url.startswith("udp://")
-                   else _http_announce(url, m.info_hash, m.total))
+            got, _interval = announce(url, port=port, left=left)
         except Exception:  # noqa: BLE001 - a dead tracker is the normal case
             continue
         for peer in got:
@@ -271,7 +373,7 @@ def peers(limit=200, deadline=25):
 class Peer:
     """One peer connection, driven synchronously by a single worker thread."""
 
-    def __init__(self, addr, info_hash, piece_count):
+    def __init__(self, addr, info_hash, piece_count, source=None):
         self.addr = addr
         self.info_hash = info_hash
         self.piece_count = piece_count
@@ -279,6 +381,9 @@ class Peer:
         self.choked = True
         self.has = bytearray(piece_count)      # 1 byte per piece: simple and fast
         self.buf = b""
+        # Whatever we can serve back over this same socket, if seeding is on.
+        self.source = source if source is not None else upload_source()
+        self.uploaded = 0
 
     def connect(self):
         self.sock = socket.create_connection(self.addr, CONNECT_TIMEOUT)
@@ -289,6 +394,13 @@ class Peer:
         reply = self._read_exact(68)
         if reply[1:20] != HANDSHAKE_PSTR or reply[28:48] != self.info_hash:
             raise TorrentError("peer speaks something else")
+        # The bitfield has to come first if it comes at all, so this is the one
+        # place it can go. Telling the peer what we hold is what turns a
+        # download connection into an upload one as well.
+        field = self.source.bitfield() if self.source else None
+        if field:
+            self._send(5, field)
+            self._send(1, b"")                 # unchoke: ask us for any of it
         self._send(2, b"")                     # interested
         return self
 
@@ -339,9 +451,33 @@ class Peer:
             elif msg_id == 7:
                 index, begin = struct.unpack(">II", payload[:8])
                 return ("block", index, begin, payload[8:])
+            elif msg_id == 2 and self.source is not None:
+                self._send(1, b"")             # they are interested: unchoke
+            elif msg_id == 6 and self.source is not None:
+                self._serve(payload)
             if until and until(self):
                 return ("ready", None, None, None)
         raise TorrentError("peer went quiet")
+
+    def _serve(self, payload):
+        """Answer a request from a peer we dialled ourselves.
+
+        Failing to serve must never cost us the download, so any trouble here
+        just retires the upload half of this connection.
+        """
+        if len(payload) < 12:
+            return
+        index, begin, length = struct.unpack(">III", payload[:12])
+        try:
+            data = self.source.read_block(index, begin, length)
+            if not data:
+                return
+            self._send(7, struct.pack(">II", index, begin) + data)
+            self.uploaded += len(data)
+            note_uploaded(len(data))
+            self.source.note_uploaded(len(data))
+        except Exception:  # noqa: BLE001
+            self.source = None
 
     def wait_unchoke(self):
         if not self.choked:
@@ -418,6 +554,7 @@ class Download:
             self.data[start:start + len(data)] = data
             self.done[i] = 1
             self.bytes_done += len(data)
+        note_downloaded(len(data))
         if self.progress:
             self.progress(self.bytes_done, self.length)
 

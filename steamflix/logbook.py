@@ -8,6 +8,7 @@ never extract". Each entry carries a category so the UI can say which:
     mirror    - a mirror was benched entirely
     key       - the depot has no decryption key, or every key attempt failed
     chain     - the delta chain is broken or incomplete on the mirror
+    torrent   - the swarm could not supply a file, or seeding has something to say
     extract   - the extractor ran but exited non-zero
     launch    - an extracted program would not start on this machine
     storage   - not enough free disk space
@@ -41,6 +42,10 @@ HINTS = {
               "Steam2-era builds usually want a runtime their installer would have "
               "shipped (an old DirectX or VC++ redistributable), or a compatibility "
               "mode. Nothing is wrong with the download.",
+    "torrent": "The swarm is volunteers with the same archive, so it is slower than "
+               "the mirrors and only as complete as whoever is online. Seeding "
+               "messages are the other direction: what SteamFlix is sharing back, "
+               "and whether anyone can reach it to ask for it.",
     "storage": "Free space on the library drive, or point SteamFlix at another drive "
                "with STEAMFLIX_LIBRARY.",
     "metadata": "Only affects the name and artwork on the card. The depot still "

@@ -190,6 +190,56 @@ def check_torrent(deep=False):
     return _result("Torrent fallback", OK, f"{detail}; {len(found)} peers online")
 
 
+def check_seeding(deep=False):
+    """Whether this machine can actually give anything back.
+
+    Two very different answers hide behind "seeding is on": we always upload to
+    peers we dialled ourselves, but accepting incoming ones needs a reachable
+    port, and that is the part that silently does not work for most people.
+    """
+    from . import seed
+    from . import torrent as torrentmod
+    if not torrentmod.available():
+        return _result("Seeding", WARN, "nothing to seed from",
+                       "Seeding needs steam2.torrent so SteamFlix knows which "
+                       "pieces the files it holds belong to.")
+    info = seed.status()
+    if not info["enabled"]:
+        return _result("Seeding", WARN, "switched off in Settings",
+                       "The archive is kept alive by the people seeding it. "
+                       "Turning this on shares back only the games you already "
+                       "downloaded.")
+    if not info["running"]:
+        # Enabled but down is a different problem from switched off, and the
+        # reason - a taken port, usually - is worth more than a generic nudge.
+        return _result("Seeding", WARN, info.get("reason") or "on, but not started",
+                       info.get("reason")
+                       or "Restart SteamFlix, and check the log for the reason "
+                          "the seeder did not come up.")
+
+    held = (f"{info['pieces']:,} verified piece(s) from {info['files']} file(s)"
+            if info["pieces"] else "nothing verified yet")
+    if info["state"] == "verifying" and info["to_check"]:
+        held += f", checking {info['checked']:,}/{info['to_check']:,}"
+    detail = f"port {info['port']}, {held}"
+
+    if not info["pieces"]:
+        return _result("Seeding", WARN, detail,
+                       "A 16 MiB piece has to be complete before it can be "
+                       "shared, and a single small blob rarely fills one. "
+                       "Downloading a full game usually produces some.",
+                       {"seed": info})
+    if not info["reachable"]:
+        return _result("Seeding", WARN, detail + ", no router mapping",
+                       f"SteamFlix still uploads to every peer it connects to "
+                       f"itself. To accept incoming peers as well, forward TCP "
+                       f"port {info['port']} to this machine, or turn on UPnP on "
+                       f"the router.", {"seed": info})
+    return _result("Seeding", OK,
+                   detail + f", forwarded by {info['mapping']['method'].upper()}",
+                   None, {"seed": info})
+
+
 def check_settings():
     conf = settings.all()
     notes = []
@@ -239,7 +289,8 @@ def run(deep=True):
     checks = [
         check_python(), check_packages(), check_catalogue(), check_disk(),
         check_extractor(), check_keys(), check_settings(), check_proxies(),
-        check_mirrors(deep), check_torrent(deep), check_library(),
+        check_mirrors(deep), check_torrent(deep), check_seeding(deep),
+        check_library(),
     ]
     worst = BAD if any(c["state"] == BAD for c in checks) else (
         WARN if any(c["state"] == WARN for c in checks) else OK)

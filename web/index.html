@@ -295,6 +295,56 @@
         </label>
       </section>
 
+      <!-- seeding -->
+      <section class="panel">
+        <h3>Seeding</h3>
+        <p class="panel-lead">
+          The blobs and dats SteamFlix downloads are the same bytes the steam2
+          torrent carries, so they can go back out to whoever is pulling them
+          next. This is what keeps a 12 TiB archive of dead Steam2 content alive
+          once the two volunteer mirrors are gone.
+        </p>
+        <div id="seed-live" class="status-body"></div>
+
+        <label class="toggle-row">
+          <input type="checkbox" id="set-seed-enabled">
+          <span>
+            <strong>Share back what I have downloaded</strong>
+            <small>Only the files already in your library, and only pieces whose
+                   checksum has been verified. Nothing else on the disk is
+                   touched or offered.</small>
+          </span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="set-seed-portmap">
+          <span>
+            <strong>Ask the router to forward the port</strong>
+            <small>Over UPnP or NAT-PMP. Without a forward SteamFlix still
+                   uploads to peers it connects to itself, but no one can start
+                   a connection to you.</small>
+          </span>
+        </label>
+        <label class="field inline">
+          <span>Listening port</span>
+          <input class="text-input small" type="number" min="1024" max="65535" id="set-seed-port">
+        </label>
+        <label class="field inline">
+          <span>Upload limit (KB/s, 0 = no limit)</span>
+          <input class="text-input small" type="number" min="0" max="1000000" id="set-seed-kbps">
+        </label>
+        <label class="field inline">
+          <span>Peers to hold open</span>
+          <input class="text-input small" type="number" min="2" max="200" id="set-seed-peers">
+        </label>
+        <label class="field inline">
+          <span>Of those, uploading at once</span>
+          <input class="text-input small" type="number" min="1" max="50" id="set-seed-slots">
+        </label>
+        <div class="row-flex" style="margin-top:10px">
+          <button class="ghost-btn" id="btn-seed-verify">Re-check the library</button>
+        </div>
+      </section>
+
       <!-- mirrors -->
       <section class="panel">
         <h3>Mirrors</h3>

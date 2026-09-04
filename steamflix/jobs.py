@@ -219,6 +219,22 @@ def _download_all(job: Job, blob_dir: Path, dat_dir: Path):
             fut.result()
 
 
+def _offer_to_swarm(job: Job):
+    """Hand the files this job downloaded to the seeder.
+
+    They are byte-identical to what the torrent carries, so they can go
+    straight back out to whoever else is pulling them.
+    """
+    try:
+        from . import seed
+        if seed.running():
+            seed.rescan()
+            job.log("added to what SteamFlix seeds back to the swarm")
+    except Exception as exc:  # noqa: BLE001 - seeding must never fail a job
+        logbook.warn("torrent", "could not offer the new files to the swarm",
+                     detail=str(exc))
+
+
 def ensure_extractor():
     """Fetch the mirror's prebuilt extractor on first use."""
     if config.EXTRACTOR_PATH.exists():
@@ -507,6 +523,7 @@ def _execute(job: Job):
 
         job.state = "done"
         job.current = ""
+        _offer_to_swarm(job)
     except net.Cancelled:
         job.state = "cancelled"
         job.log("cancelled")

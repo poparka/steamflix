@@ -85,6 +85,15 @@ CREATE TABLE IF NOT EXISTS torrent_files (
     length INTEGER NOT NULL
 );
 
+-- Local files that are also in the torrent, which is what makes seeding
+-- possible: each row says where on disk a torrent path actually lives.
+CREATE TABLE IF NOT EXISTS torrent_local (
+    tpath  TEXT PRIMARY KEY,         -- 'blobs/441_0_....blob'
+    local  TEXT NOT NULL,            -- where it sits in the library
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS favourites (
     depot INTEGER PRIMARY KEY,
     added TEXT

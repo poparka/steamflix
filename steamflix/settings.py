@@ -24,6 +24,17 @@ DEFAULTS = {
     "torrent_when_busy": True,
     "torrent_busy_threshold": 2,    # queued jobs before the swarm is used in parallel
 
+    # Seeding. Whatever SteamFlix has downloaded is the same bytes the torrent
+    # carries, so it can be served back - over the connections a download opens
+    # anyway, and over a listening port if the router will forward one.
+    "seed_enabled": True,
+    "seed_port": 6881,
+    "seed_max_peers": 24,           # connections we will hold open at once
+    "seed_slots": 6,                # of those, how many are unchoked
+    "seed_up_kbps": 0,              # 0 means "as fast as the line allows"
+    "seed_portmap": True,           # ask the router for a forward over UPnP
+    "seed_dirs": [],                # extra folders of blobs/dats to seed
+
     # Politeness.
     "request_delay_ms": 120,        # pause between mirror requests, per host
     "download_threads": config.DOWNLOAD_THREADS,
@@ -75,6 +86,12 @@ def _coerce(values):
     out["segments_per_file"] = min(16, max(1, out["segments_per_file"]))
     out["resolve_threads"] = min(8, max(1, out["resolve_threads"]))
     out["torrent_busy_threshold"] = max(1, out["torrent_busy_threshold"])
+    # Ports below 1024 need privileges nobody should be running this with, and
+    # 0 is the "pick anything free" case the seeder handles itself.
+    if out["seed_port"] and not 1024 <= out["seed_port"] <= 65535:
+        out["seed_port"] = DEFAULTS["seed_port"]
+    out["seed_max_peers"] = min(200, max(2, out["seed_max_peers"]))
+    out["seed_slots"] = min(out["seed_max_peers"], max(1, out["seed_slots"]))
     return out
 
 
@@ -124,6 +141,12 @@ def mirrors():
 
 def use_mirrors() -> bool:
     return all()["source_mode"] != "torrent"
+
+
+def seeding_wanted() -> bool:
+    """Seeding is about what is already on disk, so it does not depend on
+    where files are downloaded from - only on there being a torrent to seed."""
+    return bool(all()["seed_enabled"])
 
 
 def use_torrent() -> bool:

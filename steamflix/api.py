@@ -10,7 +10,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from . import chain, config, db, diagnostics, index, jobs, keys, logbook, media
-from . import proxies, resolver, settings, storage
+from . import proxies, resolver, seed, settings, storage
 from . import torrent as torrentmod
 from . import blob as blobmod
 from . import net
@@ -1132,8 +1132,10 @@ def api_torrent_status():
     path = config.TORRENT_PATH
     info["size"] = path.stat().st_size if path.exists() else 0
     info["note"] = ("SteamFlix fetches missing blobs and dats from the swarm itself "
-                    "when every mirror refuses them. It downloads only the pieces "
-                    "covering the file it needs, and never seeds.")
+                    "when every mirror refuses them, downloading only the pieces "
+                    "covering the file it needs - and seeds back the files it "
+                    "already holds.")
+    info["seed"] = seed.status()
     return jsonify(info)
 
 
@@ -1165,6 +1167,36 @@ def api_torrent_peers():
                     "sample": [f"{ip}:{port}" for ip, port in found[:12]]})
 
 
+@app.get("/api/torrent/seed")
+def api_seed_status():
+    """What SteamFlix is currently giving back to the swarm."""
+    return jsonify(seed.status())
+
+
+@app.post("/api/torrent/seed")
+def api_seed_control():
+    """Start or stop seeding by hand.
+
+    Turning it on here also writes the setting, so it survives a restart - a
+    button that quietly forgot itself would be worse than no button at all.
+    """
+    if not torrentmod.available():
+        return jsonify({"error": "no steam2.torrent alongside SteamFlix"}), 404
+    body = request.get_json(silent=True) or {}
+    if "enabled" in body:
+        settings.update({"seed_enabled": bool(body["enabled"])})
+    return jsonify(seed.apply_settings())
+
+
+@app.post("/api/torrent/seed/verify")
+def api_seed_verify():
+    """Re-read the library for anything new that can be seeded."""
+    if not torrentmod.available():
+        return jsonify({"error": "no steam2.torrent alongside SteamFlix"}), 404
+    seed.rescan()
+    return jsonify(seed.status())
+
+
 # --------------------------------------------------------------------------- #
 # shutting down
 # --------------------------------------------------------------------------- #
@@ -1191,6 +1223,9 @@ def api_settings_save():
                  detail=f"source={conf['source_mode']}, "
                         f"delay={conf['request_delay_ms']}ms, "
                         f"mirrors={len(conf['mirrors'])}")
+    # Seeding settings are live: a changed port, cap or switch takes effect now
+    # rather than on the next restart.
+    threading.Thread(target=seed.apply_settings, daemon=True).start()
     return jsonify({"settings": conf, "mirror_status": net.mirror_status()})
 
 
@@ -1291,6 +1326,15 @@ def api_shutdown():
 
     def stop():
         time.sleep(0.4)                 # let this response reach the browser
+        # Leave the swarm properly: tell the trackers we are gone and hand the
+        # router its port back, rather than lingering as a peer nobody can
+        # reach for the next half hour.
+        try:
+            if seed.running():
+                seed.stop()
+                time.sleep(1.2)
+        except Exception:  # noqa: BLE001 - never block the shutdown itself
+            pass
         os._exit(0)
 
     threading.Thread(target=stop, daemon=True).start()
@@ -1302,6 +1346,17 @@ def bootstrap():
     config.ensure_dirs()
     db.init()
     jobs.start()
+
+    def seeding():
+        # Whatever is already in the library can go straight back out, so this
+        # waits for neither the catalogue nor a download.
+        try:
+            seed.start()
+        except Exception as exc:  # noqa: BLE001 - never block startup on it
+            logbook.warn("torrent", "seeding did not start", detail=str(exc))
+
+    if torrentmod.available():
+        threading.Thread(target=seeding, daemon=True).start()
 
     def warm():
         if not index.is_built():
